@@ -22,8 +22,11 @@ char *help_msg[] = {
 sdb_t* sdb_create(void) {
     sdb_t *sdb = (sdb_t*) malloc(sizeof(sdb_t));
 
-    sdb->pid = -1; memset(sdb->filename, 0, PATH_MAX); 
-    memset(&sdb->header, 0, sizeof(Elf64Hdr)); 
+    sdb->pid = -1; sdb->count = 0; 
+    memset(sdb->filename, 0, sizeof(sdb->filename));
+    memset(sdb->breakpoints, 0, sizeof(sdb->breakpoints));
+    memset(&sdb->elf_header, 0, sizeof(Elf64Ehdr)); 
+    memset(&sdb->section_header, 0, sizeof(Elf64Shdr));
     cs_open(CS_ARCH_X86, CS_MODE_64, &(sdb->handle));
     
     return sdb;
@@ -35,6 +38,26 @@ bool sdb_load_status(sdb_t *sdb) {
 
 bool sdb_running_status(sdb_t *sdb) {
     return (sdb->pid != -1);
+}
+
+void sdb_break(sdb_t *sdb, char *address) {
+    // TODO: ** the address is out of the range of the text segment
+
+    if (!strcmp(address, "")) {
+        fprintf(stdout, "** no addr is given\n"); return;
+    }
+
+    if (!sdb_load_status(sdb)) {
+        fprintf(stdout, "** state must be RUNNING\n"); return;
+    }
+
+    if (!sdb_running_status(sdb)) {
+        fprintf(stdout, "** state must be RUNNING\n"); return;
+    }
+
+    // TODO: set break points
+    unsigned long long number = strtoll(address, NULL, 0);
+    sdb->breakpoints[(sdb->count)++] = number;
 }
 
 void sdb_continue(sdb_t *sdb) {
@@ -60,7 +83,17 @@ void sdb_continue(sdb_t *sdb) {
     sdb->pid = -1;
 }
 
-void sdb_disasm(sdb_t *sdb, char *address) {
+void sdb_delete(sdb_t *sdb, char *index) {
+    long int number = strtol(index, NULL, 10);
+
+    if (!strcmp(index, "")) {
+        fprintf(stdout, "** no addr is given\n"); return;
+    }
+
+    if (number < 0 || number >= sdb->count) {
+        fprintf(stdout, "** breakpoint %ld does not exist\n", number); return;
+    }
+
     if (!sdb_load_status(sdb)) {
         fprintf(stdout, "** state must be RUNNING\n"); return;
     }
@@ -69,12 +102,35 @@ void sdb_disasm(sdb_t *sdb, char *address) {
         fprintf(stdout, "** state must be RUNNING\n"); return;
     }
 
+    // TODO: restore break points instruction 
+    for (int i = number; i < sdb->count - 1; i++) {
+        sdb->breakpoints[i] = sdb->breakpoints[i + 1];
+    }
+
+    sdb->count--;
+}
+
+void sdb_disasm(sdb_t *sdb, char *address) {
     if (!strcmp(address, "")) {
         fprintf(stdout, "** no addr is given\n"); return;
     }
 
-    char assembly[ASM_SIZE]; memset(assembly, 0, ASM_SIZE);
-    unsigned long long base = strtoll(address, NULL, 0), ptr = base;
+    unsigned long long base = strtoll(address, NULL, 0);
+
+    if (base < sdb->text_address || base >= sdb->text_address + sdb->text_size) {
+        fprintf(stdout, "** the address is out of the rage of the text segment\n"); return;
+    }
+
+    if (!sdb_load_status(sdb)) {
+        fprintf(stdout, "** state must be RUNNING\n"); return;
+    }
+
+    if (!sdb_running_status(sdb)) {
+        fprintf(stdout, "** state must be RUNNING\n"); return;
+    }
+
+    unsigned long long ptr = base;
+    char assembly[ASM_SIZE]; memset(assembly, 0, sizeof(assembly));
 
     for (; ptr < base + sizeof(assembly); ptr += 8) {
         errno = 0; long long word = ptrace(PTRACE_PEEKTEXT, sdb->pid, ptr, 0);
@@ -86,12 +142,16 @@ void sdb_disasm(sdb_t *sdb, char *address) {
 
     if ((count = cs_disasm(sdb->handle, (uint8_t*) assembly, ptr - base, base, 0, &insn)) > 0) {
         for (size_t i = 0; i < count && i < 10; i++) {
-            char bytes[BYTE_SIZE]; memset(bytes, 0, BYTE_SIZE);
+            char bytes[BYTE_SIZE]; memset(bytes, 0, sizeof(bytes));
 
             for (size_t j = 0; j < insn[i].size; j++) {
-                char byte[BYTE_SIZE]; memset(byte, 0, BYTE_SIZE);
+                char byte[BYTE_SIZE]; memset(byte, 0, sizeof(byte));
                 snprintf(byte, BYTE_SIZE, "%02x ", insn[i].bytes[j]);
                 strncat(bytes, byte, strlen(byte));
+            }
+
+            if (insn[i].address < sdb->text_address || insn[i].address >= sdb->text_address + sdb->text_size) {
+                fprintf(stdout, "** the address is out of the range of the text segment\n"); break;
             }
 
             fprintf(stdout, "\t%lx: %-15s\t\t\t%s\t%s\n", 
@@ -99,13 +159,15 @@ void sdb_disasm(sdb_t *sdb, char *address) {
             );
         }
 
-        fprintf(stdout, "count: %ld\n", count);
-
         cs_free(insn, count);
     }
 }
 
 void sdb_dump(sdb_t *sdb, char *address) {
+    if (!strcmp(address, "")) {
+        fprintf(stdout, "** no addr is given\n"); return;
+    }
+
     if (!sdb_load_status(sdb)) {
         fprintf(stdout, "** state must be RUNNING\n"); return;
     }
@@ -114,11 +176,7 @@ void sdb_dump(sdb_t *sdb, char *address) {
         fprintf(stdout, "** state must be RUNNING\n"); return;
     }
 
-    if (!strcmp(address, "")) {
-        fprintf(stdout, "** no addr is given\n"); return;
-    }
-
-    char content[CONTENT_SIZE]; memset(content, 0, CONTENT_SIZE);
+    char content[CONTENT_SIZE]; memset(content, 0, sizeof(content));
     unsigned long long base = strtoll(address, NULL, 0), ptr = base;
 
     for (; ptr < base + sizeof(content); ptr += 8) {
@@ -224,6 +282,12 @@ void sdb_help(void) {
     }
 }
 
+void sdb_list(sdb_t *sdb) {
+    for (int i = 0; i < sdb->count; i++) {
+        fprintf(stdout, "%3d: %6llx\n", i, sdb->breakpoints[i]);
+    }
+}
+
 void sdb_load(sdb_t *sdb, char *filename) {
     if (sdb_load_status(sdb)) {
         fprintf(stdout, "** state must be NOT LOADED\n"); return;
@@ -235,10 +299,33 @@ void sdb_load(sdb_t *sdb, char *filename) {
         perror("fopen error"); exit(-1);
     }
 
-    fread(&sdb->header, 1, sizeof(sdb->header), fp);
-    snprintf(sdb->filename, PATH_MAX, "%s", filename);
+    fread(&sdb->elf_header, 1, sizeof(sdb->elf_header), fp);
+    fseek(fp, sdb->elf_header.e_shoff + sdb->elf_header.e_shstrndx * sizeof(sdb->section_header), SEEK_SET);
+    fread(&sdb->section_header, 1, sizeof(sdb->section_header), fp);
 
-    fprintf(stdout, "** program '%s' loaded. entry point 0x%lx\n", sdb->filename, sdb->header.e_entry);
+    char section_name[PATH_MAX]; memset(section_name, 0, sizeof(section_name));
+
+    fseek(fp, sdb->section_header.sh_offset, SEEK_SET);
+    fread(section_name, 1, sizeof(sdb->section_header), fp);
+
+    for (int i = 0; i < sdb->elf_header.e_shnum; i++) {
+        const char *name = "";
+        
+        fseek(fp, sdb->elf_header.e_shoff + i * sizeof(sdb->section_header), SEEK_SET);
+        fread(&sdb->section_header, 1, sizeof(sdb->section_header), fp);
+
+        if (sdb->section_header.sh_name) {
+            name = section_name + sdb->section_header.sh_name;
+
+            if (!strcmp(name, ".text")) {
+                sdb->text_address = sdb->section_header.sh_addr;
+                sdb->text_size = sdb->section_header.sh_size; break;
+            }
+        }
+    }
+
+    snprintf(sdb->filename, PATH_MAX, "%s", filename);
+    fprintf(stdout, "** program '%s' loaded. entry point 0x%lx\n", sdb->filename, sdb->elf_header.e_entry);
 }
 
 void sdb_run(sdb_t *sdb) {
@@ -293,7 +380,7 @@ void sdb_vmmap(sdb_t *sdb) {
         fprintf(stdout, "** state must be RUNNING\n"); return;
     }
 
-    char pathname[PATH_MAX]; memset(pathname, 0, PATH_MAX);
+    char pathname[PATH_MAX]; memset(pathname, 0, sizeof(pathname));
     snprintf(pathname, PATH_MAX, "/proc/%d/maps", sdb->pid);
 
     FILE *fp = fopen(pathname, "r");
