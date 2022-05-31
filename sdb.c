@@ -408,8 +408,11 @@ void sdb_vmmap(sdb_t *sdb) {
         if (count == 6) {
             char *upper_address = strtok(tokens[0], "-"), *lower_address = strtok(NULL, "-");
             long int upper_num = strtol(upper_address, NULL, 16), lower_num = strtol(lower_address, NULL, 16);
-            long int offset = strtol(tokens[2], NULL, 10); char *perms = tokens[1], *pathname = tokens[5];
-            fprintf(stdout, "%016lx-%016lx %s %ld\t%s\n", upper_num, lower_num, perms, offset, pathname);
+
+            long int offset = strtol(tokens[2], NULL, 10); 
+            char *perms = tokens[1], *pathname = tokens[5]; perms[strlen(perms) - 1] = 0;
+
+            fprintf(stdout, "%016lx-%016lx %s %ld\t\t%s\n", upper_num, lower_num, perms, offset, pathname);
         }
     }
 }
