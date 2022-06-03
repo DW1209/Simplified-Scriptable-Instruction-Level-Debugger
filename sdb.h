@@ -58,20 +58,26 @@ typedef struct {
 } Elf64Shdr;
 
 typedef struct {
+    bool                used;
+    unsigned long long  origin;
+    unsigned long long  address;
+} bp_t;
+
+typedef struct {
     pid_t               pid;
-    int                 count;
     csh                 handle;
     int                 text_size;
     unsigned long long  text_address;
     Elf64Ehdr           elf_header;
     Elf64Shdr           section_header;
     char                filename[PATH_MAX];
-    unsigned long long  breakpoints[BREAK_SIZE];
+    bp_t                breakpoints[BREAK_SIZE];
 } sdb_t;
 
 sdb_t*  sdb_create();
 bool    sdb_load_status(sdb_t *sdb);
 bool    sdb_running_status(sdb_t *sdb);
+void    sdb_breakpoints(sdb_t *sdb);
 
 void    sdb_break(sdb_t *sdb, char *address);
 void    sdb_continue(sdb_t *sdb);

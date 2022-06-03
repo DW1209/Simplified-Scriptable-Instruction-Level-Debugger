@@ -22,12 +22,13 @@ char *help_msg[] = {
 sdb_t* sdb_create(void) {
     sdb_t *sdb = (sdb_t*) malloc(sizeof(sdb_t));
 
-    sdb->pid = -1; sdb->count = 0; 
+    sdb->pid = -1; sdb->text_size = 0; sdb->text_address = 0;
+    cs_open(CS_ARCH_X86, CS_MODE_64, &(sdb->handle));
+
     memset(sdb->filename, 0, sizeof(sdb->filename));
-    memset(sdb->breakpoints, 0, sizeof(sdb->breakpoints));
+    memset(&sdb->breakpoints, 0, sizeof(bp_t));
     memset(&sdb->elf_header, 0, sizeof(Elf64Ehdr)); 
     memset(&sdb->section_header, 0, sizeof(Elf64Shdr));
-    cs_open(CS_ARCH_X86, CS_MODE_64, &(sdb->handle));
     
     return sdb;
 }
@@ -40,11 +41,19 @@ bool sdb_running_status(sdb_t *sdb) {
     return (sdb->pid != -1);
 }
 
-void sdb_break(sdb_t *sdb, char *address) {
-    // TODO: ** the address is out of the range of the text segment
+void sdb_breakpoints(sdb_t *sdb) {
+    
+}
 
+void sdb_break(sdb_t *sdb, char *address) {
     if (!strcmp(address, "")) {
         fprintf(stdout, "** no addr is given\n"); return;
+    }
+
+    unsigned long long number = strtoll(address, NULL, 0);
+
+    if (number < sdb->text_address || number >= sdb->text_address + sdb->text_size) {
+        fprintf(stdout, "** the address is out of the rage of the text segment\n"); return;
     }
 
     if (!sdb_load_status(sdb)) {
@@ -55,15 +64,22 @@ void sdb_break(sdb_t *sdb, char *address) {
         fprintf(stdout, "** state must be RUNNING\n"); return;
     }
 
-    // TODO: set break points
-    unsigned long long number = strtoll(address, NULL, 0);
-    sdb->breakpoints[(sdb->count)++] = number;
+    bp_t *bp;
+
+    for (int i = 0; i < BREAK_SIZE; i++) {
+        if (!sdb->breakpoints[i].used) {
+            bp = &(sdb->breakpoints[i]); break;
+        }
+    }
+
+    bp->used = true; bp->address = number; sdb_breakpoints(sdb);
 }
 
 void sdb_continue(sdb_t *sdb) {
     if (!sdb_load_status(sdb)) {
         fprintf(stdout, "state must be RUNNING\n"); return;
     }
+
     if (!sdb_running_status(sdb)) {
         fprintf(stdout, "state must be RUNNING\n"); return;
     }
@@ -90,7 +106,7 @@ void sdb_delete(sdb_t *sdb, char *index) {
         fprintf(stdout, "** no addr is given\n"); return;
     }
 
-    if (number < 0 || number >= sdb->count) {
+    if (number < 0 || number >= BREAK_SIZE || !sdb->breakpoints[number].used) {
         fprintf(stdout, "** breakpoint %ld does not exist\n", number); return;
     }
 
@@ -102,12 +118,17 @@ void sdb_delete(sdb_t *sdb, char *index) {
         fprintf(stdout, "** state must be RUNNING\n"); return;
     }
 
-    // TODO: restore break points instruction 
-    for (int i = number; i < sdb->count - 1; i++) {
-        sdb->breakpoints[i] = sdb->breakpoints[i + 1];
+    bp_t *bp = &(sdb->breakpoints[number]);
+    unsigned long long word = ptrace(PTRACE_PEEKTEXT, sdb->pid, bp->address, 0);
+
+    if ((word & 0xff) == 0xcc) {
+        ptrace(PTRACE_POKETEXT, sdb->pid, bp->address, bp->origin);
     }
 
-    sdb->count--;
+    for (int i = number; i < BREAK_SIZE; i++) {
+        if (!sdb->breakpoints[i].used) break;
+        sdb->breakpoints[i] = sdb->breakpoints[i + 1];
+    }
 }
 
 void sdb_disasm(sdb_t *sdb, char *address) {
@@ -283,8 +304,9 @@ void sdb_help(void) {
 }
 
 void sdb_list(sdb_t *sdb) {
-    for (int i = 0; i < sdb->count; i++) {
-        fprintf(stdout, "%3d: %6llx\n", i, sdb->breakpoints[i]);
+    for (int i = 0; i < BREAK_SIZE; i++) {
+        if (!sdb->breakpoints[i].used) break;
+        fprintf(stdout, "%3d: %6llx\n", i, sdb->breakpoints[i].address);
     }
 }
 
