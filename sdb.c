@@ -42,7 +42,28 @@ bool sdb_running_status(sdb_t *sdb) {
 }
 
 void sdb_breakpoints(sdb_t *sdb) {
-    
+    for (int i = 0; i < BREAK_SIZE; i++) {
+        bp_t *bp = &(sdb->breakpoints[i]);
+
+        if (!bp->used) break;
+
+        struct user_regs_struct regs;
+        ptrace(PTRACE_GETREGS, sdb->pid, 0, &regs);
+
+        if (regs.rip == bp->address) {
+            ptrace(PTRACE_SINGLESTEP, sdb->pid, 0, 0);
+            
+            if (waitpid(sdb->pid, 0, 0) < 0) {
+                perror("waitpid error"); exit(-1);
+            }
+        }
+
+        unsigned long long word = ptrace(PTRACE_PEEKTEXT, sdb->pid, bp->address, 0);
+        if ((word & 0xff) == 0xcc) continue;
+        bp->origin = word;
+
+        ptrace(PTRACE_POKETEXT, sdb->pid, bp->address, (bp->origin & 0xffffffffffffff00) | 0xcc);
+    }
 }
 
 void sdb_break(sdb_t *sdb, char *address) {
@@ -84,10 +105,43 @@ void sdb_continue(sdb_t *sdb) {
         fprintf(stdout, "state must be RUNNING\n"); return;
     }
     
-    int status; ptrace(PTRACE_CONT, sdb->pid, 0, 0);
+    int status; sdb_breakpoints(sdb); ptrace(PTRACE_CONT, sdb->pid, 0, 0);
 
     while (waitpid(sdb->pid, &status, 0) > 0) {
-        if (WIFSTOPPED(status)) break;
+        if (!WIFSTOPPED(status)) continue;
+
+        struct user_regs_struct regs;
+        ptrace(PTRACE_GETREGS, sdb->pid, 0, &regs);
+
+        for (int i = 0; i < BREAK_SIZE; i++) {
+            bp_t *bp = &(sdb->breakpoints[i]);
+
+            if (!bp->used) break;
+
+            if (bp->address == regs.rip - 1) {
+                ptrace(PTRACE_POKETEXT, sdb->pid, bp->address, bp->origin);
+                regs.rip--; ptrace(PTRACE_SETREGS, sdb->pid, 0, &regs);
+
+                cs_insn *insn; size_t count;
+                unsigned long long assembly = ptrace(PTRACE_PEEKTEXT, sdb->pid, bp->address, 0);
+
+                if ((count = cs_disasm(sdb->handle, (uint8_t*) &assembly, 8, bp->address, 0, &insn)) > 0) {
+                    char byte[BYTE_SIZE], bytes[BYTE_SIZE]; 
+                    memset(byte, 0, sizeof(byte)); memset(bytes, 0, sizeof(bytes));
+
+                    for (size_t j = 0; j < insn[0].size; j++) {
+                        snprintf(byte, BYTE_SIZE, "%02x ", insn[0].bytes[j]);
+                        strncat(bytes, byte, strlen(byte));
+                    }
+
+                    fprintf(stdout, "** breakpoint @\t\t%lx: %-15s\t\t\t%s\t%s\n", 
+                        insn[0].address, bytes, insn[0].mnemonic, insn[0].op_str
+                    );
+
+                    cs_free(insn, count); return;
+                }
+            }
+       }
     }
 
     if (WIFEXITED(status)) {
@@ -139,7 +193,7 @@ void sdb_disasm(sdb_t *sdb, char *address) {
     unsigned long long base = strtoll(address, NULL, 0);
 
     if (base < sdb->text_address || base >= sdb->text_address + sdb->text_size) {
-        fprintf(stdout, "** the address is out of the rage of the text segment\n"); return;
+        fprintf(stdout, "** the address is out of the range of the text segment\n"); return;
     }
 
     if (!sdb_load_status(sdb)) {
@@ -148,6 +202,12 @@ void sdb_disasm(sdb_t *sdb, char *address) {
 
     if (!sdb_running_status(sdb)) {
         fprintf(stdout, "** state must be RUNNING\n"); return;
+    }
+
+    for (int i = 0; i < BREAK_SIZE; i++) {
+        if (!sdb->breakpoints[i].used) break;
+        bp_t *bp = &(sdb->breakpoints[i]);
+        ptrace(PTRACE_POKETEXT, sdb->pid, bp->address, bp->origin);
     }
 
     unsigned long long ptr = base;
@@ -159,7 +219,7 @@ void sdb_disasm(sdb_t *sdb, char *address) {
         memcpy(&assembly[ptr - base], &word, 8);
     }
 
-    cs_insn *insn; size_t count;
+    sdb_breakpoints(sdb); cs_insn *insn; size_t count;
 
     if ((count = cs_disasm(sdb->handle, (uint8_t*) assembly, ptr - base, base, 0, &insn)) > 0) {
         for (size_t i = 0; i < count && i < 10; i++) {
@@ -315,7 +375,7 @@ void sdb_load(sdb_t *sdb, char *filename) {
         fprintf(stdout, "** state must be NOT LOADED\n"); return;
     }
 
-    FILE *fp = fopen(filename, "rb");
+    FILE *fp = fopen(filename, "r");
 
     if (fp == NULL) {
         perror("fopen error"); exit(-1);
@@ -325,24 +385,21 @@ void sdb_load(sdb_t *sdb, char *filename) {
     fseek(fp, sdb->elf_header.e_shoff + sdb->elf_header.e_shstrndx * sizeof(sdb->section_header), SEEK_SET);
     fread(&sdb->section_header, 1, sizeof(sdb->section_header), fp);
 
-    char section_name[PATH_MAX]; memset(section_name, 0, sizeof(section_name));
+    char section_name[sdb->section_header.sh_size]; 
+    memset(section_name, 0, sizeof(section_name));
 
     fseek(fp, sdb->section_header.sh_offset, SEEK_SET);
     fread(section_name, 1, sizeof(sdb->section_header), fp);
 
     for (int i = 0; i < sdb->elf_header.e_shnum; i++) {
-        const char *name = "";
-        
         fseek(fp, sdb->elf_header.e_shoff + i * sizeof(sdb->section_header), SEEK_SET);
         fread(&sdb->section_header, 1, sizeof(sdb->section_header), fp);
 
-        if (sdb->section_header.sh_name) {
-            name = section_name + sdb->section_header.sh_name;
+        fprintf(stdout, "name: %s\n", section_name + sdb->section_header.sh_name);
 
-            if (!strcmp(name, ".text")) {
-                sdb->text_address = sdb->section_header.sh_addr;
-                sdb->text_size = sdb->section_header.sh_size; break;
-            }
+        if (!strcmp(section_name + sdb->section_header.sh_name, ".text")) {
+            sdb->text_address = sdb->section_header.sh_addr;
+            sdb->text_size = sdb->section_header.sh_size; break;
         }
     }
 
@@ -378,10 +435,43 @@ void sdb_run(sdb_t *sdb) {
         }  
     }
 
-    ptrace(PTRACE_CONT, sdb->pid, 0, 0);
+    sdb_breakpoints(sdb); ptrace(PTRACE_CONT, sdb->pid, 0, 0);
 
     while (waitpid(sdb->pid, &status, 0) > 0) {
-        if (WIFSTOPPED(status)) break;
+        if (!WIFSTOPPED(status)) continue;
+
+        struct user_regs_struct regs;
+        ptrace(PTRACE_GETREGS, sdb->pid, 0, &regs);
+
+        for (int i = 0; i < BREAK_SIZE; i++) {
+            bp_t *bp = &(sdb->breakpoints[i]);
+
+            if (!bp->used) break;
+
+            if (bp->address == regs.rip - 1) {
+                ptrace(PTRACE_POKETEXT, sdb->pid, bp->address, bp->origin);
+                regs.rip--; ptrace(PTRACE_SETREGS, sdb->pid, 0, &regs);
+
+                cs_insn *insn; size_t count;
+                unsigned long long assembly = ptrace(PTRACE_PEEKTEXT, sdb->pid, bp->address, 0);
+
+                if ((count = cs_disasm(sdb->handle, (uint8_t*) &assembly, 8, bp->address, 0, &insn)) > 0) {
+                    char byte[BYTE_SIZE], bytes[BYTE_SIZE]; 
+                    memset(byte, 0, sizeof(byte)); memset(bytes, 0, sizeof(bytes));
+
+                    for (size_t j = 0; j < insn[0].size; j++) {
+                        snprintf(byte, BYTE_SIZE, "%02x ", insn[0].bytes[j]);
+                        strncat(bytes, byte, strlen(byte));
+                    }
+
+                    fprintf(stdout, "** breakpoint @\t\t%lx: %-15s\t\t\t%s\t%s\n", 
+                        insn[0].address, bytes, insn[0].mnemonic, insn[0].op_str
+                    );
+
+                    cs_free(insn, count); return;
+                }
+            }
+       }
     }
 
     if (WIFEXITED(status)) {
@@ -539,4 +629,6 @@ void sdb_start(sdb_t *sdb) {
         ptrace(PTRACE_SETOPTIONS, sdb->pid, 0, PTRACE_O_EXITKILL);
         fprintf(stdout, "** pid %d\n", sdb->pid);
     }
+
+    sdb_breakpoints(sdb);
 }
