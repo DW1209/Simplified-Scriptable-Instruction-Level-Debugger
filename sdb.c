@@ -389,13 +389,11 @@ void sdb_load(sdb_t *sdb, char *filename) {
     memset(section_name, 0, sizeof(section_name));
 
     fseek(fp, sdb->section_header.sh_offset, SEEK_SET);
-    fread(section_name, 1, sizeof(sdb->section_header), fp);
+    fread(section_name, 1, sdb->section_header.sh_size, fp);
 
     for (int i = 0; i < sdb->elf_header.e_shnum; i++) {
         fseek(fp, sdb->elf_header.e_shoff + i * sizeof(sdb->section_header), SEEK_SET);
         fread(&sdb->section_header, 1, sizeof(sdb->section_header), fp);
-
-        fprintf(stdout, "name: %s\n", section_name + sdb->section_header.sh_name);
 
         if (!strcmp(section_name + sdb->section_header.sh_name, ".text")) {
             sdb->text_address = sdb->section_header.sh_addr;
