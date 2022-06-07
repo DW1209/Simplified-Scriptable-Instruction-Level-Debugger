@@ -1,7 +1,7 @@
 # Simplified Scriptable Instruction Level Debugger
 ## Description
 In this program, it implements a simple instruction-level debugger that allows a user to debug a program interactively at the assemply instruction level. The program implements the debugger by using the ptrace interface. The commands that this program implemented are summarized as follows:
-```
+```console
 - break {instruction-address}: add a break point
 - cont: continue execution
 - delete {break-point-id}: remove a break point
@@ -31,7 +31,7 @@ In the debugging process, we have to load a program first, configure the debugge
 * **break** or **b** **[running]**: Setup a break point. If a program is loaded but is not running, the debugger will simply display an error message. When a break point is hit, it will output a messsage and indicate the corresponding address and instruction. The address of the break point should be within the range specified by the text segment in the ELF file and not be the same as entry point.
 * **cont** or **c** **[running]**: continue the execution when a running program is stopped or suspended.
 * **delete** **[running]**: remove a break point. The debugger has handled illegal situation, like deleting non-existing break points.
-* **disasm** or **d** **[running]**: Disassemble instructions in a file or a memory region. The address of each instruction will be within the range specified by the text segment in the ELF file. The debugger will only dump 10 instructions for each command. If **disasm** command is executed without an address, it will simply ouput `** no address is given.`
+* **disasm** or **d** **[running]**: Disassemble instructions in a file or a memory region. The address of each instruction will be within the range specified by the text segment in the ELF file. The debugger will only dump 10 instructions for each command. If **disasm** command is executed without an address, it will simply ouput `** no address is given`.
 * **dump** or **x** **[running]**: Dump memory content. The debugger will only dump 80 bytes from a given address. The output contains the addresses, the hex values and printable ASCII characters. If **dump** command is executed without an address, it will simply output `** no addr is given`.
 * **exit** or **q** **[any]**: Quit from the debugger. The program being debugged will be killed as well.
 * **get** or **g** **[running]**: Get the value of a register. Register names are all in lowercase.
