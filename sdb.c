@@ -606,7 +606,7 @@ void sdb_start(sdb_t *sdb) {
     }
 
     if (sdb_running_status(sdb)) {
-        fprintf(stdout, "** state mush be LOADED\n"); return;
+        fprintf(stdout, "** state must be LOADED\n"); return;
     }
 
     int status;
