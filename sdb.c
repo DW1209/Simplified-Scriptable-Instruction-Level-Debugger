@@ -582,11 +582,11 @@ void sdb_set(sdb_t *sdb, char *register_name, unsigned long long value) {
 
 void sdb_step(sdb_t *sdb) {
     if (!sdb_load_status(sdb)) {
-        fprintf(stdout, "** state must be RUNNING\n");
+        fprintf(stdout, "** state must be RUNNING\n"); return;
     }
 
     if (!sdb_running_status(sdb)) {
-        fprintf(stdout, "** state must be RUNNING\n");
+        fprintf(stdout, "** state must be RUNNING\n"); return;
     }
 
     if (ptrace(PTRACE_SINGLESTEP, sdb->pid, 0, 0) < 0) {
