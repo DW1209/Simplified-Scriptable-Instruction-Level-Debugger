@@ -23,7 +23,7 @@ In this program, it implements a simple instruction-level debugger that allows a
 ## Execution
 ```console
 $ sudo apt install libcapstone-dev
-$ make && ./hw4 [-s script] [program]
+$ make && ./debugger [-s script] [program]
 ```
 
 ## Explanation
